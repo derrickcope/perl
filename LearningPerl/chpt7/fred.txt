@@ -1,0 +1,7 @@
+
+This line has neither items.
+This line has Fred in it.
+This line has Barney in it.
+This line has fred.
+Fredrick should not match.
+Alfred should not match either.
