@@ -22,9 +22,12 @@ use strict;
 use warnings;
 use utf8;
 use 5.014;
-
+use Data::Dumper;
 use File::Find;
 
-find( sub { print $File::Find::name, "\n" if -d }, ".");
+my @files = ();
+my $files = \@files;
 
+find( sub { push @{$files}, $File::Find::name if -f }, ".");
 
+print Dumper (@files);
