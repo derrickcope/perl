@@ -62,7 +62,7 @@ todoist.pl --[option] ...  [item] ...
 
 
 my $url = 'https://todoist.com/API/v7/sync';
-my $token = '50f3bdb6015bc0ebbbc112ba79f8ce2139f920c8';
+my $token = 'yourtokenhere';
 my $ua = LWP::UserAgent->new;
 my @goal;
 
