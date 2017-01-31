@@ -1,0 +1,210 @@
+#!/usr/bin/env perl
+#
+# A simple syslog monitor on X11.
+# Copyright (c) 2010-2016, Hiroyuki Ohsaki.
+# All rights reserved.
+#
+# $Id: pwmlog,v 1.9 2016/11/17 07:16:33 ohsaki Exp $
+#
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+use List::Util qw(sum min max);
+use Smart::Comments;
+use Time::HiRes qw(sleep);
+use Time::HiRes qw(time alarm);
+use X11::Protocol::Constants;
+use X11::Protocol;
+use diagnostics;
+use strict;
+use warnings;
+
+my $FONT_NAME
+    = ' '; 
+    #   '-hiro-fixed-medium-r-normal--8-80-75-75-c-80-iso646.1991-irv';
+# FIXME: font size should not be hard-coded
+my $FONT_WIDTH   = 8;
+my $FONT_HEIGHT  = 8;
+my $NLINES       = 64;
+my $FRAME_RATE   = 30;
+my $REFRESH_RATE = 0.2;
+my %COLOR_TABLE  = (
+    normal   => [ undef,                         'PaleGreen' ],
+    alert    => [ qr/(warning|notice|sudo|ssh)/, 'LightGoldenrod' ],
+    critical => [
+        qr/(error|unable|invalid|illegal|failed|failure|critical|refused)/i,
+        'chocolate1'
+    ]
+);
+
+# ----------------------------------------------------------------
+# draw a string STR at the position (X, Y) with graphics context GC
+sub display_text_at {
+    my ( $x, $win, $xpos, $ypos, $gc_ref, $color, $str, $reverse ) = @_;
+
+    my %geom = $x->GetGeometry($win);
+    # erase up to the right margin
+    $x->ClearArea( $win, ( $xpos, $ypos ), $geom{width}, $FONT_HEIGHT, 0 );
+    my $width = min( $FONT_WIDTH * length($str), $geom{width} );
+    if ($reverse) {
+        $x->PolyFillRectangle( $win, $gc_ref->{$color},
+            [ ( $xpos, $ypos ), $width, $FONT_HEIGHT ] );
+        $x->PolyText8(
+            $win, $gc_ref->{black},
+            ( $xpos, $ypos + $FONT_HEIGHT - 1 ),
+            [ 0, $str ]
+        );
+    }
+    else {
+        $x->PolyText8(
+            $win, $gc_ref->{$color},
+            ( $xpos, $ypos + $FONT_HEIGHT - 1 ),
+            [ 0, $str ]
+        );
+    }
+}
+
+# ----------------------------------------------------------------
+sub create_gc {
+    my ( $x, $win ) = @_;
+
+    my $font = $x->new_rsrc();
+    $x->OpenFont( $font, $FONT_NAME );
+
+    my %gc;
+    my $colormap = $x->default_colormap();
+    for my $type ( keys %COLOR_TABLE ) {
+        my ( $regexp, $color ) = @{ $COLOR_TABLE{$type} };
+        my ( $pixel, @rest ) = $x->AllocNamedColor( $colormap, $color );
+        for my $level ( 1 .. $NLINES ) {
+            my ( $r, $g, $b ) = (
+                ( $pixel >> 16 ) & 0xff,
+                ( $pixel >> 8 ) & 0xff,
+                ( $pixel >> 0 ) & 0xff
+            );
+            ( $r, $g, $b )
+                = map { $_ * $level / $NLINES } ( $r, $g, $b );
+            my $pixel = ( $r << 16 ) | ( $g << 8 ) | $b;
+            my $gc = $x->new_rsrc();
+            $x->CreateGC(
+                $gc, $win,
+                'font'       => $font,
+                'foreground' => $pixel,
+            );
+            $gc{"$type$level"} = $gc;
+        }
+    }
+    return %gc;
+}
+
+# display the messages in the window
+sub update_screen {
+    my ( $x, $win, $gc_ref, $buf_ref ) = @_;
+
+    my $count = 0;
+    for my $str (@$buf_ref) {
+        # automatically change the color according to the context
+        my $selected = 'normal';
+        for my $type (qw(alert critical)) {
+            next if ( $type eq 'normal' );
+            my ( $regexp, $color ) = @{ $COLOR_TABLE{$type} };
+            $selected = $type if ( $str =~ /$regexp/i );
+        }
+        my $y = $FONT_HEIGHT * ( $count + 0.5 );
+        my $level = $NLINES - $count;
+        display_text_at( $x, $win, $FONT_WIDTH / 2,
+            $y, $gc_ref, "$selected$level", $str );
+        $count++;
+        last if ( $count > $NLINES );
+    }
+    $x->ConfigureWindow( $win, stack_mode => 'Below' );
+    # refresh the screen every 3 seconds
+    # FIXME: window manager should trigger screen exposure?
+    alarm 1 / $REFRESH_RATE;
+}
+
+# open a connection to X server
+my $x = X11::Protocol->new();
+my ( $xoffset, $yoffset ) = ( $x->width_in_pixels() * 0.47, 8 );
+
+# create and map a window
+my $win = $x->new_rsrc();
+my ( $width, $height )
+    = ( $x->width_in_pixels() - $xoffset, $x->height_in_pixels() - $yoffset );
+$x->CreateWindow(
+    $win,             $x->root(), 'InputOutput',
+    $x->root_depth(), 'CopyFromParent',
+    ( $xoffset, $yoffset ), $width, $height, 0,
+    'background_pixel' => $x->black_pixel(),
+    override_redirect  => 1,
+    'event_mask'       => $x->pack_event_mask('Exposure')
+);
+$x->MapWindow($win);
+
+my %gc = create_gc( $x, $win );
+my @buf;
+
+$SIG{ALRM} = sub { update_screen( $x, $win, \%gc, \@buf ) };
+
+open my $fh, '<', '/dev/xconsole' or die "open: /dev/xconsole\n";
+while (<$fh>) {
+    chomp;
+    # remote T between date and time
+    s/(\d\d\d\d-\d\d-\d\d)T(\d\d:\d\d:\d\d)/$1 $2/;
+    # delete subseconds and time zone
+    s/(\d\d:\d\d:\d\d)\.\d+\+\d\d:\d\d/$1/;
+
+    # record the last N_LINES messages
+    unshift @buf, $_;
+    splice @buf, $NLINES if ( @buf > $NLINES );
+
+    # refresh at most FRAME_RATE times per second
+    alarm 1 / $FRAME_RATE;
+}
+close $fh;
+
+__END__
+
+=head1 NAME
+
+pwmlog - A simple syslog monitor on X11.
+
+=head1 SYNOPSIS
+
+pwmlog
+
+=head1 DESCRIPTION
+
+TBD
+
+=head1 OPTIONS
+
+None
+
+=head1 AVAILABILITY
+
+The latest version of B<pwmmon> is available at
+
+http://www.lsnl.jp/~ohsaki/software/pwmlog/pwmlog
+
+=head1 SEE ALSO
+
+X11::Protocol(5), X11::Keysyms(5), twm(1), perlwm(1), pwm(1), pwmmon(1)
+
+=head1 AUTHOR
+
+Hiroyuki Ohsaki <ohsaki[atmark]lsnl.jp>
+
+=cut

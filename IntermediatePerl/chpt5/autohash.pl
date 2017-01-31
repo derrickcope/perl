@@ -1,9 +1,9 @@
 #!/usr/bin/perl
 #===============================================================================
 #
-#         FILE: missingitems.pl
+#         FILE: autohash.pl
 #
-#        USAGE: ./missingitems.pl  
+#        USAGE: ./autohash.pl  
 #
 #  DESCRIPTION: 
 #
@@ -14,7 +14,7 @@
 #       AUTHOR: Derrick Cope (), derrick(at)thecopes(dot)me
 # ORGANIZATION: 
 #      VERSION: 1.0
-#      CREATED: 08/11/2016 10:39:19 PM
+#      CREATED: 12/08/2016 09:55:08 PM
 #     REVISION: ---
 #===============================================================================
 
@@ -24,16 +24,13 @@ use utf8;
 use 5.014;
 use Data::Dumper;
 
+my $bytes = 1250;
+my $source = 'professor.hut';
+my $destination = 'gilligan.crew.hut';
 
-my @required = qw(preserver sunscreen water_bottle jacket);
-print Dumper \@required;
-my %skipper = map {$_, 1} qw(blue_shirt hat jacket preserver sunscreen);
-print Dumper \%skipper;
+my %total_bytes;
+my $total_bytes = \%total_bytes;
+$total_bytes{$source}{$destination} = $bytes;
 
-foreach my $item (@required) {
-    print $item."\n";
-    say $skipper{$item};
-    unless ( $skipper{$item} ) {
-        print "Skipper is missing item $item.\n";
-    }
-}
+print Dumper ($total_bytes);
+
